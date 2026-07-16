@@ -95,10 +95,11 @@ def generer_donnees_demo(annee=2025, conso_annuelle_GWh=20.0, graine=42):
     sin_elev = (np.sin(lat)*np.sin(decl)
                 + np.cos(lat)*np.cos(decl)*np.cos(np.radians(15*(heure+0.5-12))))
     ciel = np.clip(sin_elev, 0, None) ** 1.15
-    n_j = int(np.ceil(len(t)/24)); neb = np.zeros(n_j); neb[0] = 0.75
+    # Climat méditerranéen : forte proportion de journées claires
+    n_j = int(np.ceil(len(t)/24)); neb = np.zeros(n_j); neb[0] = 0.85
     for i in range(1, n_j):
-        neb[i] = np.clip(0.6*neb[i-1] + 0.4*rng.uniform(0.15, 1.0), 0.1, 1.0)
-    fc_pv = np.clip(0.9 * ciel * np.repeat(neb, 24)[:len(t)], 0, 1)
+        neb[i] = np.clip(0.5*neb[i-1] + 0.5*rng.uniform(0.45, 1.0), 0.2, 1.0)
+    fc_pv = np.clip(0.95 * ciel * np.repeat(neb, 24)[:len(t)], 0, 1)
 
     return pd.DataFrame({"conso_MW": conso, "fc_Éolien": np.clip(fc_eol, 0, 1),
                          "fc_Hydro": fc_hyd, "fc_PV": fc_pv}, index=t)
@@ -244,16 +245,38 @@ mode = st.sidebar.radio("Mode :", ["Démo (profils synthétiques)", "Fichiers r�
 
 if mode == "Fichiers réels":
     f_conso = st.sidebar.file_uploader("Consommation (kW)", type=["csv", "xlsx", "xls"])
-    f_prods = {f: st.sidebar.file_uploader(f"Facteur de charge {f} (0-1)",
-                                           type=["csv", "xlsx", "xls"])
-               for f in FILIERES}
+    unite_prod = st.sidebar.radio(
+        "Unité de vos fichiers de production :",
+        ["Puissance (kW)", "Facteur de charge (0-1)"],
+        help="Puissance (kW) : la courbe brute de l'installation (comme dans "
+             "Batterie1.py) ; indiquez alors sa puissance crête ci-dessous "
+             "pour que l'outil la normalise. Facteur de charge : courbe déjà "
+             "divisée par la capacité installée.")
+    f_prods, p_refs = {}, {}
+    for f in FILIERES:
+        f_prods[f] = st.sidebar.file_uploader(
+            f"Production {f}", type=["csv", "xlsx", "xls"])
+        if unite_prod == "Puissance (kW)":
+            p_refs[f] = st.sidebar.number_input(
+                f"Puissance installée {f} du fichier (kW)",
+                min_value=0.1, value=100.0, step=1.0, key=f"pref_{f}",
+                help="Puissance crête de l'installation dont provient la "
+                     "courbe : sert à convertir les kW en facteur de charge.")
     if f_conso is None or any(v is None for v in f_prods.values()):
         st.info("Importez la consommation et un profil par filière dans la barre "
                 "latérale (ou basculez en mode Démo pour tester immédiatement).")
         st.stop()
     series = {"conso_MW": charger_fichier(f_conso, "v") / 1000.0}   # kW → MW
     for f, up in f_prods.items():
-        series[f"fc_{f}"] = charger_fichier(up, "v").clip(0, 1)
+        s = charger_fichier(up, "v")
+        if unite_prod == "Puissance (kW)":
+            s = s / p_refs[f]                        # kW → facteur de charge
+        if s.max() > 1.001:
+            st.sidebar.warning(
+                f"{f} : des valeurs > 1 détectées (max = {s.max():.2f}) alors "
+                f"qu'un facteur de charge est attendu. Vérifiez l'unité ou la "
+                f"puissance de référence — les valeurs seront plafonnées à 1.")
+        series[f"fc_{f}"] = s.clip(0, 1)
     # Alignement de toutes les séries sur l'index de la consommation
     index_ref = series["conso_MW"].index
     df_complet = pd.DataFrame(
@@ -271,7 +294,12 @@ else:
 
 st.sidebar.header("2. Capacités installées (MW)")
 capacites = {f: st.sidebar.slider(f, 0.0, 20.0, v, 0.1)
-             for f, v in zip(FILIERES, [4.0, 1.5, 3.0])}
+             for f, v in zip(FILIERES, [1.5, 1.0, 6.0])}
+# Productible attendu par filière : rend le lien capacité → énergie explicite
+_recap = "  |  ".join(
+    f"{f} : {capacites[f] * df_complet[f'fc_{f}'].mean() * 8.760:.1f} GWh/an"
+    for f in FILIERES)
+st.sidebar.caption(f"Productible estimé — {_recap}")
 
 st.sidebar.header("3. Batterie")
 cap_batt = st.sidebar.slider("Capacité (MWh)", 0.0, 50.0, 4.0, 0.5)
