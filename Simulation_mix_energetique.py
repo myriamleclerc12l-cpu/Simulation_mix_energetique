@@ -45,6 +45,13 @@ COULEUR_BATTERIE = "#2ca02c"
 COULEUR_IMPORT   = "#d62728"
 COULEUR_EXPORT   = "#9467bd"
 
+def rgba(hex_couleur, alpha=1.0):
+    """'#1f77b4', 0.8 → 'rgba(31,119,180,0.8)' (les hex à 8 chiffres avec
+    canal alpha ne sont pas acceptés par le validateur de couleurs Plotly)."""
+    h = hex_couleur.lstrip("#")
+    r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
 # ==========================================
 # 2. DONNÉES : DÉMO SYNTHÉTIQUE OU FICHIERS RÉELS
 # ==========================================
@@ -99,16 +106,41 @@ def generer_donnees_demo(annee=2025, conso_annuelle_GWh=20.0, graine=42):
 
 @st.cache_data
 def charger_fichier(fichier, nom_colonne):
-    """Lit un CSV/Excel 2 colonnes (date, valeur) → série indexée datetime."""
-    if fichier.name.endswith(".csv"):
-        df = pd.read_csv(fichier)
+    """Lit un CSV/Excel (date, valeur) → série indexée datetime.
+    Robuste aux formats français : séparateur ';', décimales à virgule,
+    colonnes surnuméraires, horodatages en double (changement d'heure)."""
+    if fichier.name.lower().endswith(".csv"):
+        # sep=None + engine='python' : détection automatique de , ; ou tab
+        df = pd.read_csv(fichier, sep=None, engine="python")
+        # Si les valeurs sont du texte avec virgule décimale, retenter
+        if df.shape[1] >= 2 and df.iloc[:, 1].dtype == object:
+            fichier.seek(0)
+            df = pd.read_csv(fichier, sep=None, engine="python", decimal=",")
     else:
         df = pd.read_excel(fichier)
+
+    if df.shape[1] < 2:
+        st.error(f"Le fichier {fichier.name} doit contenir au moins 2 colonnes "
+                 f"(date, valeur) — une seule détectée. Vérifiez le séparateur.")
+        st.stop()
+    # On ne garde que les 2 premières colonnes (les exports Enedis en ont plus)
+    df = df.iloc[:, :2].copy()
     df.columns = ["date", nom_colonne]
-    df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
+
+    df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce")
+    df = df.dropna(subset=["date"])
+    df["date"] = df["date"].dt.tz_localize(None)
     df.set_index("date", inplace=True)
-    df[nom_colonne] = pd.to_numeric(df[nom_colonne], errors="coerce").fillna(0)
-    return df[nom_colonne].sort_index()
+
+    df[nom_colonne] = pd.to_numeric(
+        df[nom_colonne].astype(str).str.replace(",", ".", regex=False),
+        errors="coerce").fillna(0)
+
+    df = df.sort_index()
+    # Doublons d'horodatage (heure d'hiver) : on moyenne
+    if df.index.has_duplicates:
+        df = df.groupby(level=0).mean()
+    return df[nom_colonne]
 
 # ==========================================
 # 3. MOTEUR DE SIMULATION MULTI-ÉNERGIES
@@ -222,8 +254,15 @@ if mode == "Fichiers réels":
     series = {"conso_MW": charger_fichier(f_conso, "v") / 1000.0}   # kW → MW
     for f, up in f_prods.items():
         series[f"fc_{f}"] = charger_fichier(up, "v").clip(0, 1)
-    df_complet = pd.concat(series, axis=1).ffill().fillna(0)
-    df_complet.columns = list(series.keys())
+    # Alignement de toutes les séries sur l'index de la consommation
+    index_ref = series["conso_MW"].index
+    df_complet = pd.DataFrame(
+        {nom: s.reindex(index_ref).interpolate(limit=4).fillna(0)
+         for nom, s in series.items()}, index=index_ref)
+    if df_complet.empty or len(df_complet) < 2:
+        st.error("Les fichiers importés ne se recouvrent pas dans le temps ou "
+                 "sont vides après lecture. Vérifiez les colonnes de dates.")
+        st.stop()
     st.sidebar.success("Fichiers chargés.")
 else:
     conso_GWh = st.sidebar.number_input("Consommation annuelle (GWh)",
@@ -302,15 +341,15 @@ with tab1:
     for f, coul in FILIERES.items():
         fig.add_trace(go.Scatter(
             x=df_res.index, y=df_res[f"prod_{f}_MW"], name=f,
-            stackgroup="mix", mode="none", fillcolor=coul + "CC",
+            stackgroup="mix", mode="none", fillcolor=rgba(coul, 0.8),
             line=dict(width=0)), row=1, col=1)
     fig.add_trace(go.Scatter(
         x=df_res.index, y=df_res["batt_decharge_MW"], name="Batterie (décharge)",
-        stackgroup="mix", mode="none", fillcolor=COULEUR_BATTERIE + "AA"),
+        stackgroup="mix", mode="none", fillcolor=rgba(COULEUR_BATTERIE, 0.67)),
         row=1, col=1)
     fig.add_trace(go.Scatter(
         x=df_res.index, y=df_res["import_MW"], name="Import réseau",
-        stackgroup="mix", mode="none", fillcolor=COULEUR_IMPORT + "88"),
+        stackgroup="mix", mode="none", fillcolor=rgba(COULEUR_IMPORT, 0.53)),
         row=1, col=1)
     fig.add_trace(go.Scatter(
         x=df_res.index, y=df_res["conso_MW"], name="Consommation",
