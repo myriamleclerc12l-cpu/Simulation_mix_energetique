@@ -159,12 +159,12 @@ def calculer_kpi(df_res, dt, prix_import=80.0, prix_export=40.0):
 # 4. INTERFACE UTILISATEUR
 # ==========================================
 def main():
-    st.title("⚡ Simulateur de Mix Énergétique Communal")
+    st.title(" Simulateur de Mix Énergétique Communal")
 
     # --- BARRE LATÉRALE : PARAMÈTRES TECHNIQUES ---
     st.sidebar.header("Paramètres de l'étude")
     
-    with st.sidebar.expander("🏭 Capacités installées (MW)", expanded=True):
+    with st.sidebar.expander(" Capacités installées (MW)", expanded=True):
         capacites = {}
         for f, infos in FILIERES_DISPOS.items():
             if st.checkbox(f"Activer {f}", value=True):
@@ -172,12 +172,12 @@ def main():
             else:
                 capacites[f] = 0.0
 
-    with st.sidebar.expander("🔋 Stockage (Batterie)", expanded=True):
+    with st.sidebar.expander(" Stockage (Batterie)", expanded=True):
         cap_batt = st.slider("Capacité (MWh)", 0.0, 50.0, 4.0, 0.5)
         p_batt = cap_batt / 2.0 if st.checkbox("Puissance = capacité / 2", True) else st.slider("Puissance (MW)", 0.0, 25.0, 1.0, 0.1)
         rend_unitaire = np.sqrt(st.slider("Rendement aller-retour (%)", 70, 100, 90, 1) / 100.0)
 
-    with st.sidebar.expander("💶 Réseau & Tarification", expanded=False):
+    with st.sidebar.expander(" Réseau & Tarification", expanded=False):
         prix_imp = st.number_input("Prix d'achat (€/MWh)", value=80.0)
         prix_exp = st.number_input("Prix de vente (€/MWh)", value=40.0)
         p_max_imp = st.number_input("Import max (MW)", value=10.0)
@@ -221,6 +221,7 @@ def main():
     
     # ONGLET 1 : DÉTAIL HORAIRE
     # ONGLET 1 : DÉTAIL HORAIRE
+    # ONGLET 1 : DÉTAIL HORAIRE
     with tab1:
         st.info(" **Comment lire :** L'objectif est que les couleurs (production) touchent exactement la ligne noire (consommation). Le rouge comble les déficits (import). Le violet sous le 0 montre les surplus (export).")
         
@@ -233,19 +234,20 @@ def main():
 
         st.write("---")
         
-        # --- COMMANDES DE NAVIGATION ---
-        col_date, col_duree = st.columns(2)
-        date_debut = col_date.date_input(
-            " Aller à la date du :", 
-            value=df_res.index.min().date(), 
-            min_value=df_res.index.min().date(), 
-            max_value=df_res.index.max().date()
-        )
-        jours = col_duree.slider(" Zoom (durée affichée en jours) :", 1, 30, 5)
+        # --- COMMANDES DE NAVIGATION (Date précise ou Période) ---
+        st.write(" **Choisissez la période à afficher sur le graphique :**")
+        col_deb, col_fin = st.columns(2)
+        
+        d_min, d_max = df_res.index.min().date(), df_res.index.max().date()
+        
+        date_debut = col_deb.date_input("Date de début :", value=d_min, min_value=d_min, max_value=d_max)
+        # Par défaut, on affiche une semaine pour que ce soit lisible, mais tu peux changer !
+        date_fin = col_fin.date_input("Date de fin :", value=d_min + pd.Timedelta(days=7), min_value=date_debut, max_value=d_max)
 
-        # Création de la fenêtre de temps sélectionnée
-        date_fin = pd.to_datetime(date_debut) + pd.Timedelta(days=jours)
-        masque = (df_res.index >= pd.to_datetime(date_debut)) & (df_res.index < date_fin)
+        # On filtre les données pour le graphique
+        # On ajoute 1 jour à la date de fin pour inclure la dernière journée jusqu'à 23h59
+        fin_incluse = pd.to_datetime(date_fin) + pd.Timedelta(days=1)
+        masque = (df_res.index >= pd.to_datetime(date_debut)) & (df_res.index < fin_incluse)
         df_zoom = df_res[masque]
         # ------------------------------
 
@@ -270,8 +272,6 @@ def main():
         fig.update_yaxes(title_text="SoC Batterie (%)", range=[0, 105], row=2, col=1)
         
         st.plotly_chart(fig, use_container_width=True)
-
-
        
 
     # ONGLET 2 : BILAN MENSUEL
