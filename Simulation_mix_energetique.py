@@ -220,37 +220,55 @@ def main():
     # ONGLET 1 : DÉTAIL HORAIRE
     
     # ONGLET 1 : DÉTAIL HORAIRE
+    # ONGLET 1 : DÉTAIL HORAIRE
     with tab1:
-        st.info(" **Comment lire ce graphique ?** L'objectif est que les aires colorées (production) atteignent exactement la courbe noire (consommation). Le rouge apparaît quand on manque d'énergie locale. Les valeurs négatives apparaissent quand on produit trop.")
+        st.info(" **Comment lire :** L'objectif est que les couleurs (production) touchent exactement la ligne noire (consommation). Le rouge comble les déficits (import). Le violet sous le 0 montre les surplus (export).")
         
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("TAP (Autoproduction)", f"{kpi['TAP_pct']:.1f} %")
         c2.metric("TAC (Autoconsommation)", f"{kpi['TAC_pct']:.1f} %")
         c3.metric("Import", f"{kpi['import_MWh']:.0f} MWh")
         c4.metric("Écrêtage", f"{kpi['ecretage_MWh']:.0f} MWh")
-        c5.metric("Facture", f"{kpi['facture_k€']:.1f} k€")
+        c5.metric("Facture nette", f"{kpi['facture_k€']:.1f} k€")
 
-        # --- AJOUT DU ZOOM ---
         st.write("---")
-        jours_a_afficher = st.slider("🔍 Zoom (nombre de jours affichés sur le graphique)", min_value=1, max_value=30, value=5)
-        df_zoom = df_res.head(24 * jours_a_afficher) # On coupe les données pour y voir clair
-        # ---------------------
+        
+        # --- COMMANDES DE NAVIGATION ---
+        col_date, col_duree = st.columns(2)
+        date_debut = col_date.date_input(
+            " Aller à la date du :", 
+            value=df_res.index.min().date(), 
+            min_value=df_res.index.min().date(), 
+            max_value=df_res.index.max().date()
+        )
+        jours = col_duree.slider(" Zoom (durée affichée en jours) :", 1, 30, 5)
+
+        # Création de la fenêtre de temps sélectionnée
+        date_fin = pd.to_datetime(date_debut) + pd.Timedelta(days=jours)
+        masque = (df_res.index >= pd.to_datetime(date_debut)) & (df_res.index < date_fin)
+        df_zoom = df_res[masque]
+        # ------------------------------
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.05)
         
-        # On utilise df_zoom au lieu de df_res pour tracer le graphique
+        # Empilement des productions
         for f in [f for f in capacites if capacites[f] > 0]:
             fig.add_trace(go.Scatter(x=df_zoom.index, y=df_zoom[f"prod_{f}_MW"], name=f, stackgroup="mix", fillcolor=rgba(FILIERES_DISPOS[f]["couleur"], 0.8), mode="none"), row=1, col=1)
             
         fig.add_trace(go.Scatter(x=df_zoom.index, y=df_zoom["batt_decharge_MW"], name="Décharge Bat.", stackgroup="mix", fillcolor=rgba(COULEUR_BATTERIE, 0.7), mode="none"), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_zoom.index, y=df_zoom["import_MW"], name="Import", stackgroup="mix", fillcolor=rgba(COULEUR_IMPORT, 0.5), mode="none"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df_zoom.index, y=df_zoom["conso_MW"], name="Conso", line=dict(color="black", width=2)), row=1, col=1)
+        
+        # Lignes superposées (Conso et Export)
+        fig.add_trace(go.Scatter(x=df_zoom.index, y=df_zoom["conso_MW"], name="Consommation", line=dict(color="black", width=2)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_zoom.index, y=-df_zoom["export_MW"], name="Export", fill="tozeroy", line=dict(color=COULEUR_EXPORT, width=1)), row=1, col=1)
         
-        # SoC Batterie sur la zone zoomée
-        fig.add_trace(go.Scatter(x=df_zoom.index, y=df_zoom["SoC_pct"], name="SoC (%)", line=dict(color=COULEUR_BATTERIE)), row=2, col=1)
+        # Courbe de Batterie (SoC)
+        fig.add_trace(go.Scatter(x=df_zoom.index, y=df_zoom["SoC_pct"], name="SoC (%)", line=dict(color=COULEUR_BATTERIE, width=2), fill="tozeroy"), row=2, col=1)
 
-        fig.update_layout(height=600, hovermode="x unified", margin=dict(t=20, b=20))
+        fig.update_layout(height=600, hovermode="x unified", margin=dict(t=20, b=20), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        fig.update_yaxes(title_text="Puissance (MW)", row=1, col=1)
+        fig.update_yaxes(title_text="SoC Batterie (%)", range=[0, 105], row=2, col=1)
+        
         st.plotly_chart(fig, use_container_width=True)
 
 
